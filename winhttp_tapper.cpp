@@ -16,11 +16,11 @@
 #include "logging.h"
 
 int convert_wide_string(char *out_buf, int out_buf_len, LPCWSTR wide_string, int wide_string_len){
-	int len = WideCharToMultiByte(CP_UTF8, MB_ERR_INVALID_CHARS, wide_string, wide_string_len, NULL, 0, NULL, NULL);
+	int len = WideCharToMultiByte(CP_UTF8, 0, wide_string, wide_string_len, NULL, 0, NULL, NULL);
 	if(len > out_buf_len){
 		return -1;
 	}
-	return WideCharToMultiByte(CP_UTF8, MB_ERR_INVALID_CHARS, wide_string, wide_string_len, out_buf, out_buf_len, NULL, NULL);
+	return WideCharToMultiByte(CP_UTF8, 0, wide_string, wide_string_len, out_buf, out_buf_len, NULL, NULL);
 }
 
 HINTERNET (WINAPI *WinHttpConnectOrig)(HINTERNET, LPCWSTR, INTERNET_PORT, DWORD);
@@ -32,7 +32,7 @@ HINTERNET WINAPI WinHttpConnectPatched(HINTERNET hSession, LPCWSTR pswzServerNam
 	if(len > 0){
 		LOG("WinHttpConnect connecting to %s:%d, hSession 0x%p, ret 0x%p", server_name_buf, nServerPort, hSession, ret);
 	}else{
-		LOG("WinHttpConnect failed converting pswzServerName wdf");
+		LOG("WinHttpConnect failed converting pswzServerName wdf %d", len);
 	}
 	return ret;
 }
@@ -41,16 +41,20 @@ HINTERNET (WINAPI *WinHttpOpenRequestOrig)(HINTERNET,LPCWSTR,LPCWSTR,LPCWSTR,LPC
 HINTERNET WINAPI WinHttpOpenRequestPatched(HINTERNET hConnect, LPCWSTR pwszVerb, LPCWSTR pwszObjectName, LPCWSTR pwszVersion, LPCWSTR pwszReferrer, LPCWSTR *ppwszAcceptTypes, DWORD dwFlags){
 	HINTERNET ret = WinHttpOpenRequestOrig(hConnect, pwszVerb, pwszObjectName, pwszVersion, pwszReferrer, ppwszAcceptTypes, dwFlags);
 	char method_buf[4096];
-	int method_len = convert_wide_string(method_buf, sizeof(method_buf), pwszVerb, -1);
-	if(method_len <= 0){
-		LOG("WinHttpOpenRequest failed converting pwszVerb wdf");
-		return ret;
+	if(pwszVerb != NULL){
+		int method_len = convert_wide_string(method_buf, sizeof(method_buf), pwszVerb, -1);
+		if(method_len <= 0){
+			LOG("WinHttpOpenRequest failed converting pwszVerb wdf %d", method_len);
+			return ret;
+		}
+	}else{
+		strcpy(method_buf, "GET");
 	}
 
 	char resource_buf[4096];
 	int resource_len = convert_wide_string(resource_buf, sizeof(resource_buf), pwszObjectName, -1);
 	if(resource_len <= 0){
-		LOG("WinHttpOpenRequest failed converting pwszObjectName wdf");
+		LOG("WinHttpOpenRequest failed converting pwszObjectName wdf %d", resource_len);
 		return ret;
 	}
 
@@ -66,23 +70,25 @@ WINBOOL WINAPI WinHttpSendRequestPatched(HINTERNET hRequest, LPCWSTR lpszHeaders
 	char header_buf[4096] = {0};
 	int header_len = 0;
 	if(lpszHeaders != NULL){
+		memset(header_buf, 0, 8);
 		memcpy(header_buf, &hRequest, sizeof(HINTERNET));
-		header_len = convert_wide_string(header_buf + sizeof(HINTERNET), sizeof(header_buf) - sizeof(HINTERNET), lpszHeaders, dwHeadersLength);
+		header_len = convert_wide_string(header_buf + 8, sizeof(header_buf) - sizeof(HINTERNET), lpszHeaders, dwHeadersLength);
 		if(header_len <= 0){
-			LOG("WinHttpSendRequestPatched failed converting lpszHeaders wdf");
+			LOG("WinHttpSendRequestPatched failed converting lpszHeaders wdf %d", header_len);
 			return ret;
 		}
-		dump_data(header_buf, header_len + sizeof(HINTERNET), LOG_TYPE_REQUEST_HEADER);
+		dump_data(header_buf, header_len + 8, LOG_TYPE_REQUEST_HEADER);
 	}
 
 	if(lpOptional != NULL){
-		char *optional_buf = (char *)malloc(dwOptionalLength + sizeof(HINTERNET));
+		char *optional_buf = (char *)malloc(8 + dwOptionalLength);
 		if(optional_buf == NULL){
 			LOG("WinHttpSendRequestPatched cannot allocate buffer for dumping on-request optional data wdf");
 		}else{
+			memset(optional_buf, 0, 8);
 			memcpy(optional_buf, &hRequest, sizeof(HINTERNET));
-			memcpy(optional_buf + sizeof(HINTERNET), lpOptional, dwOptionalLength);
-			dump_data(optional_buf, sizeof(HINTERNET) + dwOptionalLength, LOG_TYPE_REQUEST_OPTIONAL_DUMP);
+			memcpy(optional_buf + 8, lpOptional, dwOptionalLength);
+			dump_data(optional_buf, 8 + dwOptionalLength, LOG_TYPE_REQUEST_OPTIONAL_DUMP);
 			free(optional_buf);
 		}
 	}
@@ -95,13 +101,14 @@ WINBOOL WINAPI WinHttpReadDataPatched(HINTERNET hRequest, LPVOID lpBuffer, DWORD
 	WINBOOL ret = WinHttpReadDataOrig(hRequest, lpBuffer, dwNumberOfBytesToRead, lpdwNumberOfBytesRead);
 	LOG("WinHttpReadData hRequest 0x%p, dwNumberOfBytesToRead %d, lpdwNumberOfBytesRead %d, ret %s", hRequest, dwNumberOfBytesToRead, *lpdwNumberOfBytesRead, ret? "true" : "false");
 	if(ret && *lpdwNumberOfBytesRead > 0){
-		char *data_buf = (char *)malloc(*lpdwNumberOfBytesRead + sizeof(HINTERNET));
+		char *data_buf = (char *)malloc(*lpdwNumberOfBytesRead + 8);
 		if(data_buf == NULL){
 			LOG("WinHttpReadData cannot allocate buffer for dumping data wdf");
 		}else{
+			memset(data_buf, 0, 8);
 			memcpy(data_buf, &hRequest, sizeof(HINTERNET));
-			memcpy(data_buf + sizeof(HINTERNET), lpBuffer, *lpdwNumberOfBytesRead);
-			dump_data(data_buf, sizeof(HINTERNET) + *lpdwNumberOfBytesRead, LOG_TYPE_READ_DATA_DUMP);
+			memcpy(data_buf + 8, lpBuffer, *lpdwNumberOfBytesRead);
+			dump_data(data_buf, 8 + *lpdwNumberOfBytesRead, LOG_TYPE_READ_DATA_DUMP);
 			free(data_buf);
 		}
 	}
@@ -114,13 +121,14 @@ WINBOOL WINAPI WinHttpReadDataExPatched(HINTERNET hRequest, LPVOID lpBuffer, DWO
 	WINBOOL ret = WinHttpReadDataExOrig(hRequest, lpBuffer, dwNumberOfBytesToRead, lpdwNumberOfBytesRead, ullFlags, cbProperty, pvProperty);
 	LOG("WinHttpReadDataEx hRequest 0x%p, dwNumberOfBytesToRead %d, lpdwNumberOfBytesRead %d, ret %s", hRequest, dwNumberOfBytesToRead, *lpdwNumberOfBytesRead, ret? "true" : "false");
 	if(ret && *lpdwNumberOfBytesRead > 0){
-		char *data_buf = (char *)malloc(*lpdwNumberOfBytesRead + sizeof(HINTERNET));
+		char *data_buf = (char *)malloc(*lpdwNumberOfBytesRead + 8);
 		if(data_buf == NULL){
 			LOG("WinHttpReadData cannot allocate buffer for dumping data wdf");
 		}else{
+			memset(data_buf, 0, 8);
 			memcpy(data_buf, &hRequest, sizeof(HINTERNET));
-			memcpy(data_buf + sizeof(HINTERNET), lpBuffer, *lpdwNumberOfBytesRead);
-			dump_data(data_buf, sizeof(HINTERNET) + *lpdwNumberOfBytesRead, LOG_TYPE_READ_DATA_DUMP);
+			memcpy(data_buf + 8, lpBuffer, *lpdwNumberOfBytesRead);
+			dump_data(data_buf, 8 + *lpdwNumberOfBytesRead, LOG_TYPE_READ_DATA_DUMP);
 			free(data_buf);
 		}
 	}
@@ -138,35 +146,60 @@ int hook_functions(){
 			ret = -1;
 			break;
 		}
-		int ret = MH_CreateHookApiEx(L"winhttp", "WinHttpConnect", (LPVOID)&WinHttpConnectPatched, NULL, (void**)&WinHttpConnectOrig);
+		ret = MH_Initialize();
 		if(ret != MH_OK){
-			LOG("Failed hooking winhttp WinHttpConnect");
+			LOG("Failed initializing MinHook, %d", ret);
 			break;
+		}
+		LPVOID target;
+		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpConnect", (LPVOID)&WinHttpConnectPatched, (void**)&WinHttpConnectOrig, &target);
+		if(ret != MH_OK){
+			LOG("Failed hooking winhttp WinHttpConnect, %d", ret);
+			break;
+		}
+		ret = MH_EnableHook(target);
+		if(ret != MH_OK){
+			LOG("Failed enabling winhttp WinHttpConnect hook");
 		}
 
-		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpOpenRequest", (LPVOID)&WinHttpOpenRequestPatched, NULL, (void**)&WinHttpOpenRequestOrig);
+		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpOpenRequest", (LPVOID)&WinHttpOpenRequestPatched, (void**)&WinHttpOpenRequestOrig, &target);
 		if(ret != MH_OK){
-			LOG("Failed hooking winhttp WinHttpOpenRequest");
+			LOG("Failed hooking winhttp WinHttpOpenRequest, %d", ret);
 			break;
+		}
+		ret = MH_EnableHook(target);
+		if(ret != MH_OK){
+			LOG("Failed enabling winhttp WinHttpOpenRequest hook");
 		}
 
-		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpSendRequest", (LPVOID)&WinHttpSendRequestPatched, NULL, (void**)&WinHttpSendRequestOrig);
+		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpSendRequest", (LPVOID)&WinHttpSendRequestPatched, (void**)&WinHttpSendRequestOrig, &target);
 		if(ret != MH_OK){
-			LOG("Failed hooking winhttp WinHttpSendRequest");
+			LOG("Failed hooking winhttp WinHttpSendRequest, %d", ret);
 			break;
+		}
+		ret = MH_EnableHook(target);
+		if(ret != MH_OK){
+			LOG("Failed enabling winhttp WinHttpSendRequest hook");
 		}
 
-		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpReadData", (LPVOID)&WinHttpReadDataPatched, NULL, (void**)&WinHttpReadDataOrig);
+		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpReadData", (LPVOID)&WinHttpReadDataPatched, (void**)&WinHttpReadDataOrig, &target);
 		if(ret != MH_OK){
-			LOG("Failed hooking winhttp WinHttpReadData");
+			LOG("Failed hooking winhttp WinHttpReadData, %d", ret);
 			break;
+		}
+		ret = MH_EnableHook(target);
+		if(ret != MH_OK){
+			LOG("Failed enabling winhttp WinHttpReadData hook");
 		}
 
-		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpReadDataEx", (LPVOID)&WinHttpReadDataExPatched, NULL, (void**)&WinHttpReadDataExOrig);
+		/*
+		not even in 10 22h2..?
+		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpReadDataEx", (LPVOID)&WinHttpReadDataExPatched, (void**)&WinHttpReadDataExOrig, &target);
 		if(ret != MH_OK){
-			LOG("Failed hooking winhttp WinHttpReadData");
+			LOG("Failed hooking winhttp WinHttpReadDataEx, %d", ret);
 			break;
 		}
+		*/
 
 		break;
 	}
@@ -174,6 +207,7 @@ int hook_functions(){
 	if(ret != MH_OK){
 		return 1;
 	}
+	LOG("functions hooked successfully");
 	return 0;
 }
 
