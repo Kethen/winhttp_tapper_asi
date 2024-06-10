@@ -9,7 +9,9 @@ void dump_data(char *data_buf, uint32_t len, uint32_t type);
 
 enum LOG_TYPE {
 	LOG_TYPE_LOG = 0,
-	LOG_TYPE_DUMP
+	LOG_TYPE_REQUEST_HEADER = 1,
+	LOG_TYPE_REQUEST_OPTIONAL_DUMP = 2,
+	LOG_TYPE_READ_DATA_DUMP = 3
 };
 
 #define LOG(...){ \
