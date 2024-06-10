@@ -156,6 +156,18 @@ WINBOOL WINAPI WinHttpWriteDataPatched(HINTERNET hRequest, LPCVOID lpBuffer, DWO
 	return ret;
 }
 
+WINBOOL (WINAPI *WinHttpCloseHandleOrig)(HINTERNET);
+WINBOOL WINAPI WinHttpCloseHandlePatched(HINTERNET hInternet){
+	WINBOOL ret = WinHttpCloseHandleOrig(hInternet);
+	LOG("WinHttpCloseHandle 0x%p, ret %s", hInternet, ret? "true": "false");
+	if(ret){
+		char data_buf[8] = {0};
+		memcpy(data_buf, &hInternet, sizeof(HINTERNET));
+		dump_data(data_buf, 8, LOG_TYPE_CLOSE_HANDLE);
+	}
+	return ret;
+}
+
 int hook_functions(){
 	int ret = 0;
 	while(true){
@@ -224,6 +236,17 @@ int hook_functions(){
 		ret = MH_EnableHook(target);
 		if(ret != MH_OK){
 			LOG("Failed enabling winhttp WinHttpWriteData hook");
+			break;
+		}
+
+		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpCloseHandle", (LPVOID)&WinHttpCloseHandlePatched, (void**)&WinHttpCloseHandleOrig, &target);
+		if(ret != MH_OK){
+			LOG("Failed hooking winhttp WinHttpCloseHandle, %d", ret);
+			break;
+		}
+		ret = MH_EnableHook(target);
+		if(ret != MH_OK){
+			LOG("Failed enabling winhttp WinHttpCloseHandle hook");
 			break;
 		}
 
