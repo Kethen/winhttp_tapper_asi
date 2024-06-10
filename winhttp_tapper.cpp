@@ -136,6 +136,26 @@ WINBOOL WINAPI WinHttpReadDataExPatched(HINTERNET hRequest, LPVOID lpBuffer, DWO
 	return ret;
 }
 
+WINBOOL (WINAPI *WinHttpWriteDataOrig)(HINTERNET,LPCVOID,DWORD,LPDWORD);
+WINBOOL WINAPI WinHttpWriteDataPatched(HINTERNET hRequest, LPCVOID lpBuffer, DWORD dwNumberOfBytesToWrite, LPDWORD lpdwNumberOfBytesWritten){
+	WINBOOL ret = WinHttpWriteDataOrig(hRequest, lpBuffer, dwNumberOfBytesToWrite, lpdwNumberOfBytesWritten);
+	LOG("WinHttpWriteData hRequest 0x%p, dwNumberOfBytesToWrite %d, lpdwNumberOfBytesWritten %d, ret %s", hRequest, dwNumberOfBytesToWrite, *lpdwNumberOfBytesWritten, ret? "true": "false");
+	if(ret && *lpdwNumberOfBytesWritten > 0){
+		char *data_buf = (char *)malloc(*lpdwNumberOfBytesWritten + 8);
+		if(data_buf == NULL){
+			LOG("WinHttpWriteData cannot allocate buffer for dumping data wdf");
+		}else{
+			memset(data_buf, 0, 8);
+			memcpy(data_buf, &hRequest, sizeof(HINTERNET));
+			memcpy(data_buf + 8, lpBuffer, *lpdwNumberOfBytesWritten);
+			dump_data(data_buf, 8 + *lpdwNumberOfBytesWritten, LOG_TYPE_WRITE_DATA_DUMP);
+			free(data_buf);
+		}
+	}
+
+	return ret;
+}
+
 int hook_functions(){
 	int ret = 0;
 	while(true){
@@ -160,6 +180,7 @@ int hook_functions(){
 		ret = MH_EnableHook(target);
 		if(ret != MH_OK){
 			LOG("Failed enabling winhttp WinHttpConnect hook");
+			break;
 		}
 
 		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpOpenRequest", (LPVOID)&WinHttpOpenRequestPatched, (void**)&WinHttpOpenRequestOrig, &target);
@@ -170,6 +191,7 @@ int hook_functions(){
 		ret = MH_EnableHook(target);
 		if(ret != MH_OK){
 			LOG("Failed enabling winhttp WinHttpOpenRequest hook");
+			break;
 		}
 
 		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpSendRequest", (LPVOID)&WinHttpSendRequestPatched, (void**)&WinHttpSendRequestOrig, &target);
@@ -180,6 +202,7 @@ int hook_functions(){
 		ret = MH_EnableHook(target);
 		if(ret != MH_OK){
 			LOG("Failed enabling winhttp WinHttpSendRequest hook");
+			break;
 		}
 
 		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpReadData", (LPVOID)&WinHttpReadDataPatched, (void**)&WinHttpReadDataOrig, &target);
@@ -190,6 +213,18 @@ int hook_functions(){
 		ret = MH_EnableHook(target);
 		if(ret != MH_OK){
 			LOG("Failed enabling winhttp WinHttpReadData hook");
+			break;
+		}
+
+		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpWriteData", (LPVOID)&WinHttpWriteDataPatched, (void**)&WinHttpWriteDataOrig, &target);
+		if(ret != MH_OK){
+			LOG("Failed hooking winhttp WinHttpWriteData, %d", ret);
+			break;
+		}
+		ret = MH_EnableHook(target);
+		if(ret != MH_OK){
+			LOG("Failed enabling winhttp WinHttpWriteData hook");
+			break;
 		}
 
 		/*
@@ -197,6 +232,11 @@ int hook_functions(){
 		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpReadDataEx", (LPVOID)&WinHttpReadDataExPatched, (void**)&WinHttpReadDataExOrig, &target);
 		if(ret != MH_OK){
 			LOG("Failed hooking winhttp WinHttpReadDataEx, %d", ret);
+			break;
+		}
+		ret = MH_EnableHook(target);
+		if(ret != MH_OK){
+			LOG("Failed enabling winhttp WinHttpReadDataEx hook");
 			break;
 		}
 		*/
@@ -215,6 +255,9 @@ int hook_functions(){
 __attribute__((constructor))
 int init(){
 	init_logging();
-	hook_functions();
+	if(hook_functions() != 0){
+		LOG("hooking failed, terminating process :(");
+		exit(0);
+	}
 	return 0;
 }
