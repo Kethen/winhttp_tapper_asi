@@ -93,6 +93,7 @@ def parse_file(f):
 		del requests[handle]
 
 	last_header = None
+	last_payload = None
 	while True:
 		header = read_header(f)
 		if header == False:
@@ -103,10 +104,7 @@ def parse_file(f):
 		payload = f.read(payload_size)
 		payload_len = len(payload)
 		if payload_len != payload_size:
-			print(f"end of file reached during payload read, header size {payload_size}, read size {payload_len}")
-			print(f"header {header}")
-			if last_header is not None:
-				print(f"last header {last_header}")
+			print(f"end of file reached during payload read")
 			break
 
 		type = header["type"]
@@ -174,12 +172,10 @@ def parse_file(f):
 
 		else:
 			print(f"bad type {type}")
-			print(f"header {header}")
-			if last_header is not None:
-				print(f"last_header {last_header}")
 			break
 
 		last_header = header
+		last_payload = payload
 
 	for handle in list(requests.keys()):
 		wrapup_request(requests, handle, data_only, data_and_log)
