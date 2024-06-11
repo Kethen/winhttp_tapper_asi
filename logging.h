@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 bool can_log();
-void init_logging();
+int init_logging();
 void dump_data(char *data_buf, uint32_t len, uint32_t type);
 
 enum LOG_TYPE {
@@ -13,7 +13,9 @@ enum LOG_TYPE {
 	LOG_TYPE_REQUEST_OPTIONAL_DUMP = 2,
 	LOG_TYPE_READ_DATA_DUMP = 3,
 	LOG_TYPE_WRITE_DATA_DUMP = 4,
-	LOG_TYPE_CLOSE_HANDLE = 5
+	LOG_TYPE_CLOSE_HANDLE = 5,
+	LOG_TYPE_CONNECT = 6,
+	LOG_TYPE_REQUEST = 7,
 };
 
 #define LOG(...){ \

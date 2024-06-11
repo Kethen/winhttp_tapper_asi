@@ -8,6 +8,7 @@
 
 // std
 #include <stdint.h>
+#include <string.h>
 
 // there are likely multiple flavors of winhttp.dll, so let's use a hooking library
 // https://github.com/TsudaKageyu/minhook
@@ -23,6 +24,7 @@ int convert_wide_string(char *out_buf, int out_buf_len, LPCWSTR wide_string, int
 	return WideCharToMultiByte(CP_UTF8, 0, wide_string, wide_string_len, out_buf, out_buf_len, NULL, NULL);
 }
 
+
 HINTERNET (WINAPI *WinHttpConnectOrig)(HINTERNET, LPCWSTR, INTERNET_PORT, DWORD);
 HINTERNET WINAPI WinHttpConnectPatched(HINTERNET hSession, LPCWSTR pswzServerName, INTERNET_PORT nServerPort, DWORD dwReserved){
 	HINTERNET ret = WinHttpConnectOrig(hSession, pswzServerName, nServerPort, dwReserved);
@@ -31,6 +33,16 @@ HINTERNET WINAPI WinHttpConnectPatched(HINTERNET hSession, LPCWSTR pswzServerNam
 	int len = convert_wide_string(server_name_buf, sizeof(server_name_buf), pswzServerName, -1);
 	if(len > 0){
 		LOG("WinHttpConnect connecting to %s:%d, hSession 0x%p, ret 0x%p", server_name_buf, nServerPort, hSession, ret);
+		if(ret != NULL){
+			char data_buf[sizeof(server_name_buf) + 8 + 6] = {0};
+			memcpy(data_buf, &ret, sizeof(HINTERNET));
+			// remove null
+			len = len - 1;
+			memcpy(data_buf + 8, server_name_buf, len);
+			data_buf[8 + len] = ':';
+			int port_len = sprintf(&data_buf[8 + len + 1], "%d", nServerPort);
+			dump_data(data_buf, 8 + len + 1 + port_len, LOG_TYPE_CONNECT);
+		}
 	}else{
 		LOG("WinHttpConnect failed converting pswzServerName wdf %d", len);
 	}
@@ -59,6 +71,25 @@ HINTERNET WINAPI WinHttpOpenRequestPatched(HINTERNET hConnect, LPCWSTR pwszVerb,
 	}
 
 	LOG("WinHttpOpenRequest hConnect 0x%p, method %s, resource %s, ret 0x%p", hConnect, method_buf, resource_buf, ret);
+	if(ret != NULL){
+		char data_buf[8 + sizeof(method_buf) + sizeof(resource_buf)] = {0};
+		int offset = 0;
+		memcpy(&data_buf[offset], &hConnect, sizeof(HINTERNET));
+		offset += 8;
+		memcpy(&data_buf[offset], &ret, sizeof(HINTERNET));
+		offset += 8;
+		int len = strlen(method_buf);
+		strcpy(&data_buf[offset], method_buf);
+		offset += len;
+		data_buf[offset] = '|';
+		offset++;
+		len = strlen(resource_buf);
+		strcpy(&data_buf[offset], resource_buf);
+		offset += len;
+
+		dump_data(data_buf, offset, LOG_TYPE_REQUEST);
+	}
+
 	return ret;
 }
 
@@ -141,7 +172,7 @@ WINBOOL WINAPI WinHttpWriteDataPatched(HINTERNET hRequest, LPCVOID lpBuffer, DWO
 	WINBOOL ret = WinHttpWriteDataOrig(hRequest, lpBuffer, dwNumberOfBytesToWrite, lpdwNumberOfBytesWritten);
 	LOG("WinHttpWriteData hRequest 0x%p, dwNumberOfBytesToWrite %d, lpdwNumberOfBytesWritten %d, ret %s", hRequest, dwNumberOfBytesToWrite, *lpdwNumberOfBytesWritten, ret? "true": "false");
 	if(ret && *lpdwNumberOfBytesWritten > 0){
-		char *data_buf = (char *)malloc(*lpdwNumberOfBytesWritten + 8);
+		char *data_buf = (char *)malloc(8 + *lpdwNumberOfBytesWritten);
 		if(data_buf == NULL){
 			LOG("WinHttpWriteData cannot allocate buffer for dumping data wdf");
 		}else{
@@ -165,6 +196,43 @@ WINBOOL WINAPI WinHttpCloseHandlePatched(HINTERNET hInternet){
 		memcpy(data_buf, &hInternet, sizeof(HINTERNET));
 		dump_data(data_buf, 8, LOG_TYPE_CLOSE_HANDLE);
 	}
+	return ret;
+}
+
+HINTERNET (WINAPI *WinHttpOpenOrig)(LPCWSTR,DWORD,LPCWSTR,LPCWSTR,DWORD);
+HINTERNET WINAPI WinHttpOpenPatched(LPCWSTR pszAgentW, DWORD dwAccessType, LPCWSTR pszProxyW, LPCWSTR pszProxyBypassW, DWORD dwFlags){
+	HINTERNET ret = WinHttpOpenOrig(pszAgentW, dwAccessType, pszProxyW, pszProxyBypassW, dwFlags);
+	char user_agent_buf[4096] = {0};
+	if(pszAgentW != NULL){
+		if(convert_wide_string(user_agent_buf, sizeof(user_agent_buf), pszAgentW, -1) <= 0){
+			LOG("WinHttpOpen failed converting pszAgentW wdf");
+			return ret;
+		}
+	}else{
+		strcpy(user_agent_buf, "<no user agent set>");
+	}
+
+	char proxy_buf[4096] = {0};
+	if(pszProxyW != NULL){
+		if(convert_wide_string(proxy_buf, sizeof(proxy_buf), pszProxyW, -1) <= 0){
+			LOG("WinHttpOpen failed converting pszProxyW wdf");
+			return ret;
+		}
+	}else{
+		strcpy(proxy_buf, "<no proxy>");
+	}
+
+	char proxy_bypass_buf[4096] = {0};
+	if(pszProxyBypassW != NULL){
+		if(convert_wide_string(proxy_bypass_buf, sizeof(proxy_bypass_buf), pszProxyBypassW, -1) <= 0){
+			LOG("WinHttpOpen failed converting pszProxyW wdf");
+			return ret;
+		}
+	}else{
+		strcpy(proxy_bypass_buf, "<no proxy> bypass set");
+	}
+
+	LOG("WinHttpOpen pszAgentW %s, dwAccessType %d, pszProxyW %s, pszProxyBypassW %s, dwFlags %d, ret 0x%p, async %s", user_agent_buf, dwAccessType, proxy_buf, proxy_bypass_buf, dwFlags, ret, dwFlags & WINHTTP_FLAG_ASYNC? "true" : "false");
 	return ret;
 }
 
@@ -250,6 +318,17 @@ int hook_functions(){
 			break;
 		}
 
+		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpOpen", (LPVOID)&WinHttpOpenPatched, (void**)&WinHttpOpenOrig, &target);
+		if(ret != MH_OK){
+			LOG("Failed hooking winhttp WinHttpOpen, %d", ret);
+			break;
+		}
+		ret = MH_EnableHook(target);
+		if(ret != MH_OK){
+			LOG("Failed enabling winhttp WinHttpOpen hook");
+			break;
+		}
+
 		/*
 		not even in 10 22h2..?
 		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpReadDataEx", (LPVOID)&WinHttpReadDataExPatched, (void**)&WinHttpReadDataExOrig, &target);
@@ -277,10 +356,13 @@ int hook_functions(){
 // entrypoint
 __attribute__((constructor))
 int init(){
-	init_logging();
+	if(init_logging() != 0){
+		LOG("pthread init failed, terminating process :(");
+		exit(1);
+	}
 	if(hook_functions() != 0){
 		LOG("hooking failed, terminating process :(");
-		exit(0);
+		exit(1);
 	}
 	return 0;
 }
