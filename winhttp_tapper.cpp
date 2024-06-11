@@ -406,6 +406,14 @@ HINTERNET WINAPI WinHttpOpenPatched(LPCWSTR pszAgentW, DWORD dwAccessType, LPCWS
 	return ret;
 }
 
+HINTERNET (WINAPI *WinHttpWebSocketCompleteUpgradeOrig)(HINTERNET,DWORD_PTR);
+HINTERNET WINAPI WinHttpWebSocketCompleteUpgradePatched(HINTERNET hRequest, DWORD_PTR pContext){
+	HINTERNET ret = WinHttpWebSocketCompleteUpgradeOrig(hRequest, pContext);
+	LOG("WinHttpWebSocketCompleteUpgradeOrig getting websocket handle from request 0x%p, ret 0x%p", hRequest, ret);
+	return ret;
+}
+
+
 int hook_functions(){
 	int ret = 0;
 	while(true){
@@ -507,6 +515,17 @@ int hook_functions(){
 		ret = MH_EnableHook(target);
 		if(ret != MH_OK){
 			LOG("Failed enabling winhttp WinHttpSetStatusCallback hook");
+			break;
+		}
+
+		ret = MH_CreateHookApiEx(L"winhttp", "WinHttpWebSocketCompleteUpgrade", (LPVOID)&WinHttpWebSocketCompleteUpgradePatched, (void**)&WinHttpWebSocketCompleteUpgradeOrig, &target);
+		if(ret != MH_OK){
+			LOG("Failed hooking winhttp WinHttpWebSocketCompleteUpgrade, %d", ret);
+			break;
+		}
+		ret = MH_EnableHook(target);
+		if(ret != MH_OK){
+			LOG("Failed enabling winhttp WinHttpWebSocketCompleteUpgrade hook");
 			break;
 		}
 
